@@ -6,6 +6,7 @@ import pandas as pd
 from bokeh.models import GeoJSONDataSource
 from bokeh.plotting import figure, show, output_file
 from bokeh.tile_providers import get_provider, Vendors
+import matplotlib.pyplot as plt
 
 
 class Enc:
@@ -27,10 +28,18 @@ class Enc:
             objects = objects[objects.geom_type == geom_type]
         
             if acronym is 'SLCONS' and geom_type is 'LineString':
-                no_piers = objects['CATSLC'] != 4  # pier (jetty)
-                no_fenders = objects['CATSLC'] != 14  # fender
-                not_submerged = objects['WATLEV'] != 3  # always under water/submerged
-                objects = objects[no_piers & no_fenders & not_submerged]
+                #no_piers = objects['CATSLC'] != 4  # pier (jetty)
+                #no_fenders = objects['CATSLC'] != 14  # fender
+                #not_submerged = objects['WATLEV'] != 3  # always under water/submerged
+                #objects = objects[no_piers & no_fenders & not_submerged]
+
+
+
+
+                piers = objects['CATSLC'] == 4  
+                fenders = objects['CATSLC'] == 14  
+                submerged = objects['WATLEV'] == 3 
+                objects = objects[piers & fenders & submerged]
 
             if acronym is 'M_COVR':
                 no_coverage = objects['CATCOV'] != 2
@@ -47,11 +56,15 @@ class Shorex:
     wgs84 = {'init': 'epsg:4326'}
     webmerc = {'init': 'epsg:3857'}
 
-    def __init__(self, enc_dir, ref_dir):
+    def __init__(self, enc_dir, ref_dir, bands_to_process):
         self.enc_dir = enc_dir
         self.ref_dir = ref_dir
         self.geojsons = []
-        self.gpkg_path = self.ref_dir / 'CUSP.gpkg'
+        self.bands_to_process = bands_to_process
+        self.enc_objects = self.ref_dir / 'ENC_Objects.gpkg'
+        self.ref_bands_gpkg_path = self.ref_dir / 'Reference_Bands.gpkg'
+        self.cusp_ref_gpkg_path = self.ref_dir / 'CUSP_Reference.gpkg'
+        self.sliver_tolerance = 0.0000005
 
     @staticmethod
     def set_env_vars(env_name):
@@ -89,7 +102,11 @@ class Shorex:
                 gdf = gpd.GeoDataFrame(df, geometry='geometry', 
                                        crs=self.wgs84).explode()
                 layer = '{}_{}_Band{}'.format(acronym, geom_type, band)
-                gdf.to_file(self.gpkg_path, layer=layer, driver='GPKG')
+                
+                try:
+                    gdf.to_file(self.enc_objects, layer=layer, driver='GPKG')
+                except Exception as e:
+                    print(e, '({} - {})'.format(acronym, geom_type))
 
     def plot_objects(self):
 
@@ -133,69 +150,129 @@ class Shorex:
         output_file("tile.html")
         show(p)
 
-    def create_ref_shoreline(self, coalne, slcons, band):
+    def create_ref_shoreline(self, coalne, slcons, rivers, band):
         coalne_df  = pd.concat(coalne, ignore_index=True)
         slcons_df  = pd.concat(slcons, ignore_index=True)
+        rivers_df  = pd.concat(rivers, ignore_index=True)
 
         coalne_gdf = gpd.GeoDataFrame(coalne_df.geometry, crs=self.wgs84)
         slcons_gdf = gpd.GeoDataFrame(slcons_df.geometry, crs=self.wgs84)
+        rivers_gdf = gpd.GeoDataFrame(rivers_df.geometry, crs=self.wgs84)
 
         shoreline = coalne_gdf.geometry.union(slcons_gdf.geometry)
+        shoreline = shoreline.union(rivers_gdf.geometry)
         gdf = gpd.GeoDataFrame(geometry=shoreline, crs=self.wgs84).explode()
         layer = 'CUSP_Reference_Band{}'.format(band)
-        gdf.to_file(self.gpkg_path, layer=layer, driver='GPKG')
+        gdf.to_file(self.ref_bands_gpkg_path, layer=layer, driver='GPKG')
 
-    def gen_cusp_band_regions(self, bands_to_process):
+    def create_ref_shoreline_2(self, lndare, mcovr, band):
+        lndare_df  = pd.concat(lndare, ignore_index=True)
+        mcovr_df  = pd.concat(mcovr, ignore_index=True)
+
+        lndare_gdf = gpd.GeoDataFrame(lndare_df.geometry, crs=self.wgs84).explode().reset_index()
+        mcovr_gdf = gpd.GeoDataFrame(mcovr_df.geometry, crs=self.wgs84).explode().reset_index()
+
+        print('intersecting LNDARE with M_COVR to get pre-reference...')
+        sindex = lndare_gdf.sindex
+        shoreline_bits = []
+        for poly in mcovr_gdf.geometry:
+            possible_lndare_idx = list(sindex.intersection(poly.bounds))
+            possible_lndare = lndare_gdf.iloc[possible_lndare_idx]
+
+            precise_lndare = possible_lndare.intersection(poly)
+            precise_lndare = precise_lndare[~precise_lndare.is_empty]
+
+            shoreline_line = precise_lndare.boundary.difference(poly.boundary)
+            shoreline_bits.append(shoreline_line.explode().reset_index())
+            
+        print('saving results...')
+        df = pd.concat(shoreline_bits, ignore_index=True)
+        print(df)
+        gdf = gpd.GeoDataFrame(geometry=df[0])
+        gdf.plot()
+        plt.show()
+        gdf = gdf[gdf.geom_type == 'LineString']
+        
+
+        gdf.to_file(str(self.ref_bands_gpkg_path), 
+                    layer='CUSP_Reference_Band{}'.format(band))
+        
+
+
+        #shoreline = lndare_gdf.geometry.boundary.difference(mcovr_buffer).explode().reset_index()
+        #print(shoreline)
+
+        #gdf = gpd.GeoDataFrame(geometry=shoreline[0], crs=self.wgs84).explode()
+        #layer = 'CUSP_Reference_Band{}'.format(band)
+        #gdf.to_file(self.ref_bands_gpkg_path, layer=layer, driver='GPKG')
+
+    def gen_cusp_band_regions(self):
 
         bands = []
-        for b in bands_to_process:
+        for b in self.bands_to_process:
             layer= r'M_COVR_Polygon_Band{}'.format(b)
-            gdf = gpd.read_file(str(self.gpkg_path), layer=layer)
+            gdf = gpd.read_file(str(self.enc_objects), layer=layer)
             bands.append(gdf)
 
-        gdf = gpd.GeoDataFrame(pd.concat(bands).geometry, 
-                               crs=self.wgs84).explode()
-        b1, b2, b3, b4, b5 = bands
-
-        b4_not_5 = gpd.overlay(b4, b5, how='difference')
-        df = pd.concat([b5, b4_not_5], ignore_index=True)
-        b54 = gpd.GeoDataFrame(df, geometry='geometry', crs=self.wgs84)
-
-        b3_not_45 = gpd.overlay(b3, b54, how='difference')
-        df = pd.concat([b54, b3_not_45], ignore_index=True)
-        b543 = gpd.GeoDataFrame(df, geometry='geometry', crs=self.wgs84)
-
-        b2_not_345 = gpd.overlay(b2, b543, how='difference')
-        df = pd.concat([b543, b2_not_345], ignore_index=True)
-        b5432 = gpd.GeoDataFrame(df, geometry='geometry', crs=self.wgs84)
-
-        b1_not_2345 = gpd.overlay(b1, b5432, how='difference')
-        df = pd.concat([b5432, b1_not_2345], ignore_index=True)
-        b54321 = gpd.GeoDataFrame(df, geometry='geometry', crs=self.wgs84)
-
+        bands.reverse()  # [5, 4, 3, 2, 1]
+        current_band_coverage = bands[0]  # i.e., largest-scale band
+        for b in bands[1:5]:  # start with largest-scale band and "work down"
+            b_not_higher = gpd.overlay(b, current_band_coverage, how='difference').explode()
+            b_not_higher = b_not_higher[b_not_higher.geometry.area > self.sliver_tolerance]
+            df = pd.concat([current_band_coverage, b_not_higher], ignore_index=True)
+            current_band_coverage = gpd.GeoDataFrame(df, geometry='geometry', crs=self.wgs84)
+        
         layer = 'CUSP_band_regions'
-        cusp_band_regions = b54321.explode()
-        cusp_band_regions.to_file(self.gpkg_path, layer=layer, driver='GPKG')
+        cusp_band_regions = current_band_coverage.explode()
+        cusp_band_regions.to_file(self.cusp_ref_gpkg_path, 
+                                  layer=layer, driver='GPKG')
+
+    def create_cusp_ref(self):
+        band_regions = gpd.read_file(str(self.cusp_ref_gpkg_path), 
+                                     layer='CUSP_band_regions')
+        
+        for b in self.bands_to_process:
+            print('reading Band {} CUSP reference shoreline...'.format(b))
+            b_ref =  gpd.read_file(str(self.ref_bands_gpkg_path), 
+                                   layer='CUSP_Reference_Band{}'.format(b))
+
+            sindex = b_ref.sindex
+            lines = []
+
+            print('clipping Band {} reference with band {} regions...'.format(b, b))
+            b_regions = band_regions[band_regions['band'] == b]
+
+            for poly in b_regions.geometry:
+                possible_lines_idx = list(sindex.intersection(poly.bounds))
+                possible_lines = b_ref.iloc[possible_lines_idx]
+                precise_lines = possible_lines.intersection(poly)
+                lines.append(precise_lines.explode())
+            
+            print('saving results...')
+            df = pd.concat(lines, ignore_index=True)
+            gdf = gpd.GeoDataFrame(geometry=df)
+            gdf = gdf[gdf.geom_type == 'LineString']
+            gdf.to_file(str(self.cusp_ref_gpkg_path), 
+                        layer='CUSP_Reference_Band{}_CLIPPED'.format(b))
 
 
 def main():
 
     enc_dir = Path(r'C:\ENCs\All_ENCs\ENC_ROOT')
     ref_dir = Path(r'Z:\ENC_Shoreline_Extractor')
-    shorex = Shorex(enc_dir, ref_dir)
+    bands_to_process = [5]
+    shorex = Shorex(enc_dir, ref_dir, bands_to_process)
     shorex.set_env_vars('enc_shorex')
 
-    bands_to_process = [1, 2, 3, 4, 5]
-
-    for band in bands_to_process:
+    for band in shorex.bands_to_process:
         print('processing band {}...'.format(band))
         objects_to_extract = {'Point': [],
                               'LineString': ['COALNE', 'SLCONS'],
-                              'Polygon': ['M_COVR']}
+                              'Polygon': ['LNDARE', 'RIVERS', 'M_COVR', 'M_CSCL']}
 
         objects = {'Point': {}, 'LineString': {}, 'Polygon': {}}
 
-        encs = list(shorex.enc_dir.rglob('US{}*.000'.format(band)))
+        encs = list(shorex.enc_dir.rglob('US{}*.000'.format(band)))[0:50]
         num_encs = len(encs)
 
         for i, enc in enumerate(encs, 1):
@@ -215,11 +292,17 @@ def main():
         #shorex.export_to_geojson(objects)
         #shorex.plot_objects()
 
-        shorex.create_ref_shoreline(objects['LineString']['COALNE'], 
-                                    objects['LineString']['SLCONS'],
-                                    band)
+        #shorex.create_ref_shoreline(objects['LineString']['COALNE'], 
+        #                            objects['LineString']['SLCONS'],
+        #                            objects['LineString']['RIVERS'],
+        #                            band)
 
-    shorex.gen_cusp_band_regions(bands_to_process)
+        shorex.create_ref_shoreline_2(objects['Polygon']['LNDARE'],
+                                      objects['Polygon']['M_COVR'],
+                                      band)
+
+    shorex.gen_cusp_band_regions()
+    shorex.create_cusp_ref()
 
 
 if __name__ == '__main__':
