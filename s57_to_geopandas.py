@@ -165,12 +165,21 @@ class Shorex:
         layer = 'CUSP_Reference_Band{}'.format(band)
         gdf.to_file(self.ref_bands_gpkg_path, layer=layer, driver='GPKG')
 
-    def create_ref_shoreline_2(self, lndare, mcovr, band):
+    def create_ref_shoreline_2(self, lndare, mcovr, mcscl, band):
         lndare_df  = pd.concat(lndare, ignore_index=True)
         mcovr_df  = pd.concat(mcovr, ignore_index=True)
+        mcscl_df  = pd.concat(mcscl, ignore_index=True)
 
         lndare_gdf = gpd.GeoDataFrame(lndare_df.geometry, crs=self.wgs84).explode().reset_index()
         mcovr_gdf = gpd.GeoDataFrame(mcovr_df.geometry, crs=self.wgs84).explode().reset_index()
+        mcscl_gdf = gpd.GeoDataFrame(mcscl_df.geometry, crs=self.wgs84).explode().reset_index()
+
+        #enc_polys = gpd.overlay(mcovr_gdf, mcscl_gdf, how='union')
+        #print(type(enc_polys))
+        #print(enc_polys)
+        #enc_polys.plot()
+        #plt.show()
+        #enc_polys = enc_polys[~enc_polys.is_empty]
 
         print('intersecting LNDARE with M_COVR to get pre-reference...')
         sindex = lndare_gdf.sindex
@@ -180,6 +189,7 @@ class Shorex:
             possible_lndare = lndare_gdf.iloc[possible_lndare_idx]
 
             precise_lndare = possible_lndare.intersection(poly)
+            #precise_lndare = precise_lndare[precise_lndare.geom_type == 'LineString']
             precise_lndare = precise_lndare[~precise_lndare.is_empty]
 
             shoreline_line = precise_lndare.boundary.difference(poly.boundary)
@@ -256,6 +266,10 @@ class Shorex:
                         layer='CUSP_Reference_Band{}_CLIPPED'.format(b))
 
 
+#             coords = list(polygon.exterior.geometry.iloc[0].coords)
+#gdf = g.GeoDataFrame(geometry=[Polygon(coords[2:])], crs=crs)
+
+
 def main():
 
     enc_dir = Path(r'C:\ENCs\All_ENCs\ENC_ROOT')
@@ -299,6 +313,7 @@ def main():
 
         shorex.create_ref_shoreline_2(objects['Polygon']['LNDARE'],
                                       objects['Polygon']['M_COVR'],
+                                      objects['Polygon']['M_CSCL'],
                                       band)
 
     shorex.gen_cusp_band_regions()
