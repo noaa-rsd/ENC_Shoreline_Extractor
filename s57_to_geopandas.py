@@ -12,19 +12,19 @@ from shapely.geometry import Point, LineString, Polygon, MultiLineString
 from shapely import ops
 
 
-import os
-import json
-from datetime import datetime
-from pathlib import Path
-from functools import partial
-import tkinter as tk
-from tkinter import filedialog
-import numpy as np
-import pandas as pd
-import geopandas as gpd
-import pyproj
-from shapely.ops import transform, unary_union
-from cartopy.geodesic import Geodesic
+#import os
+#import json
+#from datetime import datetime
+#from pathlib import Path
+#from functools import partial
+#import tkinter as tk
+#from tkinter import filedialog
+#import numpy as np
+#import pandas as pd
+#import geopandas as gpd
+#import pyproj
+#from shapely.ops import transform, unary_union
+#from cartopy.geodesic import Geodesic
 
 
 class Enc:
@@ -272,14 +272,11 @@ class Shorex:
                 else:
                     shoreline_line = lndare_poly_gdf.boundary.difference(poly.boundary)
                     shoreline_bits.append(shoreline_line.explode().reset_index())
-
-                #except Exception as e:
-                #    print(e)
             
         print('saving results...')
         df = pd.concat(shoreline_bits, ignore_index=True)
         print(df)
-        gdf = gpd.GeoDataFrame(geometry=df[0])
+        gdf = gpd.GeoDataFrame(geometry=df[0], crs=self.wgs84)
         gdf = gdf[gdf.geom_type == 'LineString']
         
         gdf.to_file(str(self.ref_bands_gpkg_path), 
@@ -294,9 +291,9 @@ class Shorex:
             gdf = gpd.read_file(str(self.enc_objects), layer=layer)
             bands.append(gdf)
 
-        bands.reverse()  # [5, 4, 3, 2, 1]
+        bands.reverse()  # [6, 5, 4, 3, 2, 1]
         current_band_coverage = bands[0]  # i.e., largest-scale band
-        for b in bands[1:5]:  # start with largest-scale band and "work down"
+        for b in bands[1:6]:  # start with largest-scale band and "work down"
             b_not_higher = gpd.overlay(b, current_band_coverage, how='difference').explode()
             b_not_higher = b_not_higher[b_not_higher.geometry.area > self.sliver_tolerance]
             df = pd.concat([current_band_coverage, b_not_higher], ignore_index=True)
@@ -306,7 +303,7 @@ class Shorex:
         cusp_band_regions = current_band_coverage.explode()
         cusp_band_regions.to_file(self.cusp_ref_gpkg_path, 
                                   layer=layer, driver='GPKG')
-
+        
     def create_cusp_ref(self):
         band_regions = gpd.read_file(str(self.cusp_ref_gpkg_path), 
                                      layer='CUSP_band_regions')
@@ -332,6 +329,7 @@ class Shorex:
             df = pd.concat(lines, ignore_index=True)
             gdf = gpd.GeoDataFrame(geometry=df)
             gdf = gdf[gdf.geom_type == 'LineString']
+            gdf.crs = self.wgs84
             gdf.to_file(str(self.cusp_ref_gpkg_path), 
                         layer='CUSP_Reference_Band{}_CLIPPED'.format(b))
 
@@ -344,94 +342,99 @@ def main():
 
     enc_dir = Path(r'C:\ENCs\All_ENCs\ENC_ROOT')
     ref_dir = Path(r'Z:\ENC_Shoreline_Extractor')
-    bands_to_process = [1, 2, 3, 4, 5]
+    bands_to_process = [1, 2, 3, 4, 5, 6]
     shorex = Shorex(enc_dir, ref_dir, bands_to_process)
     shorex.set_env_vars('enc_shorex')
 
-    for band in shorex.bands_to_process:
-        print('processing band {}...'.format(band))
-        objects_to_extract = {'Point': [],
-                              'LineString': ['COALNE', 'SLCONS'],
-                              'Polygon': ['LNDARE', 'LNDRGN', 
-                                          'M_COVR', 'M_CSCL',
-                                          'RIVERS', 'LAKARE']}
+    #for band in shorex.bands_to_process:
+    #    print('processing band {}...'.format(band))
+    #    objects_to_extract = {'Point': [],
+    #                          'LineString': ['COALNE', 'SLCONS'],
+    #                          'Polygon': ['LNDARE', 'LNDRGN', 
+    #                                      'M_COVR', 'M_CSCL',
+    #                                      'RIVERS', 'LAKARE']}
 
-        objects = {'Point': {}, 'LineString': {}, 'Polygon': {}}
+    #    objects = {'Point': {}, 'LineString': {}, 'Polygon': {}}
 
-        encs = list(shorex.enc_dir.rglob('US{}NH.000'.format(band)))
+    #    encs = list(shorex.enc_dir.rglob('US{}*.000'.format(band)))
         
-        num_encs = len(encs)
+    #    num_encs = len(encs)
 
-        for i, enc in enumerate(encs, 1):
-            enc = Enc(enc)
-            print('{} ({} of {})'.format(enc, i, num_encs))
+    #    for i, enc in enumerate(encs, 1):
+    #        enc = Enc(enc)
+    #        print('{} ({} of {})'.format(enc, i, num_encs))
 
-            for geom_type in objects_to_extract.keys():
-                for acronym in objects_to_extract[geom_type]:
-                    enc_objs = enc.get_objects(acronym, geom_type)
+    #        for geom_type in objects_to_extract.keys():
+    #            for acronym in objects_to_extract[geom_type]:
+    #                enc_objs = enc.get_objects(acronym, geom_type)
 
-                    if acronym not in objects[geom_type].keys():
-                        objects[geom_type].update({acronym: []})
+    #                if acronym not in objects[geom_type].keys():
+    #                    objects[geom_type].update({acronym: []})
 
-                    objects[geom_type][acronym].append(enc_objs)
+    #                objects[geom_type][acronym].append(enc_objs)
 
-        shorex.export_to_gpkg(objects, band)
-        #shorex.export_to_geojson(objects)
-        #shorex.plot_objects()
+    #    shorex.export_to_gpkg(objects, band)
+    #    #shorex.export_to_geojson(objects)
+    #    #shorex.plot_objects()
 
-        shorex.create_ref_shoreline_2(objects, band)
+    #    print(objects)
+
+    #    shorex.create_ref_shoreline_2(objects, band)
 
     shorex.gen_cusp_band_regions()
     shorex.create_cusp_ref()
 
 
 if __name__ == '__main__':
-    #main()
+    main()
 
-    user_dir = os.path.expanduser('~')
-    conda_dir = Path(user_dir).joinpath('AppData', 'Local', 'Continuum', 'anaconda3')
-    env_dir = conda_dir / 'envs' / 'cusp'
-    share_dir = env_dir / 'Library' / 'share'
-    script_path = conda_dir / 'Scripts'
-    gdal_data_path = share_dir / 'gdal'
-    proj_lib_path = share_dir
+    #user_dir = os.path.expanduser('~')
+    #conda_dir = Path(user_dir).joinpath('AppData', 'Local', 'Continuum', 'anaconda3')
+    #env_dir = conda_dir / 'envs' / 'cusp'
+    #share_dir = env_dir / 'Library' / 'share'
+    #script_path = conda_dir / 'Scripts'
+    #gdal_data_path = share_dir / 'gdal'
+    #proj_lib_path = share_dir
 
-    if script_path.name not in os.environ["PATH"]:
-        os.environ["PATH"] += os.pathsep + str(script_path)
-    os.environ["GDAL_DATA"] = str(gdal_data_path)
-    os.environ["PROJ_LIB"] = str(proj_lib_path)
+    #if script_path.name not in os.environ["PATH"]:
+    #    os.environ["PATH"] += os.pathsep + str(script_path)
+    #os.environ["GDAL_DATA"] = str(gdal_data_path)
+    #os.environ["PROJ_LIB"] = str(proj_lib_path)
 
-    band_dir = Path(r'C:\Users\Nick.Forfinski-Sarko\Documents\ArcGIS\Projects\ENC_Shoreline_Extractor\ENC_Shoreline_Extractor.gdb')
+    #band_dir = Path(r'C:\Users\Nick.Forfinski-Sarko\Documents\ArcGIS\Projects\ENC_Shoreline_Extractor\ENC_Shoreline_Extractor.gdb')
 
-    geod = Geodesic()
+    #geod = Geodesic()
 
-    def distance(pt1, pt2):  # from https://pelson.github.io/2018/coast-path/
-        result = np.array(geod.inverse(np.asanyarray(pt1), np.asanyarray(pt2)))
-        return result[:, 0]
-
-
-    def linestring_distance(geom):  # from https://pelson.github.io/2018/coast-path/
-        if hasattr(geom, 'geoms'):
-            return sum(linestring_distance(subgeom) for subgeom in geom.geoms)
-        else:
-            points = np.array(geom.coords)
-            return distance(points[:-1, :2], points[1:, :2]).sum()
+    #def distance(pt1, pt2):  # from https://pelson.github.io/2018/coast-path/
+    #    result = np.array(geod.inverse(np.asanyarray(pt1), np.asanyarray(pt2)))
+    #    return result[:, 0]
 
 
-    length = {}
-    for b in range(1, 6):
+    #def linestring_distance(geom):  # from https://pelson.github.io/2018/coast-path/
+    #    if hasattr(geom, 'geoms'):
+    #        return sum(linestring_distance(subgeom) for subgeom in geom.geoms)
+    #    else:
+    #        points = np.array(geom.coords)
+    #        return distance(points[:-1, :2], points[1:, :2]).sum()
 
-        band_gdf = gpd.read_file(str(band_dir), layer='Band{}_AK'.format(b))
+
+    #length = {}
+    #for b in range(1, 2):
+
+    #    band_gdf = gpd.read_file(str(band_dir), layer='_70k')
         
-        print('Band {}...'.format(b))
-        print('-' * 50)
+    #    print('70k...'.format(b))
+    #    print('-' * 50)
 
-        band_length = 0
-        for geom in band_gdf.geometry:
-            band_length += linestring_distance(geom)
+    #    band_length = 0
+    #    for geom in band_gdf.geometry:
+    #        band_length += linestring_distance(geom)
 
-        length[str(b)] = band_length
-        print(length)
+    #    length[str(b)] = band_length
+    #    print(length)
 
-    length_df = pd.DataFrame(length, index=[0])
-    print(length_df.values)
+
+    #    print()
+
+    #length_df = pd.DataFrame(length, index=[0])
+    #print(length_df.values)
