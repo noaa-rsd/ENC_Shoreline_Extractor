@@ -1,30 +1,11 @@
 import os
-import fiona
+import numpy as np
 from pathlib import Path
-import geopandas as gpd
 import pandas as pd
-#from bokeh.models import GeoJSONDataSource
-#from bokeh.plotting import figure, show, output_file
-#from bokeh.tile_providers import get_provider, Vendors
-import matplotlib.pyplot as plt
-
-from shapely.geometry import Point, LineString, Polygon, MultiLineString
-from shapely import ops
-
-
-#import os
-#import json
-#from datetime import datetime
-#from pathlib import Path
-#from functools import partial
-#import tkinter as tk
-#from tkinter import filedialog
-#import numpy as np
-#import pandas as pd
-#import geopandas as gpd
-#import pyproj
-#from shapely.ops import transform, unary_union
-#from cartopy.geodesic import Geodesic
+import geopandas as gpd
+import fiona
+from shapely.geometry import LineString, MultiLineString
+from cartopy.geodesic import Geodesic
 
 
 class Enc:
@@ -46,11 +27,6 @@ class Enc:
             objects = objects[objects.geom_type == geom_type]
         
             if acronym is 'SLCONS' and geom_type is 'LineString':
-                #no_piers = objects['CATSLC'] != 4  # pier (jetty)
-                #no_fenders = objects['CATSLC'] != 14  # fender
-                #not_submerged = objects['WATLEV'] != 3  # always under water/submerged
-                #objects = objects[no_piers & no_fenders & not_submerged]
-
                 piers = objects['CATSLC'] == 4  
                 fenders = objects['CATSLC'] == 14  
                 submerged = objects['WATLEV'] == 3 
@@ -124,67 +100,6 @@ class Shorex:
                     except Exception as e:
                         print(e, '({} - {})'.format(acronym, geom_type))
 
-    def plot_objects(self):
-
-        c = {
-            'Point': {'OBSTRN': 'red',},
-
-            'LineString': {'COALNE': 'blue',
-                           'SLCONS': 'green',},
-
-            'Polygon': {'LNDARE': 'orange',
-                        'MCOVR': 'lightgray',
-                        'MQUAL': 'gray',
-                        'DEPARE': 'blue',}
-             }
-
-        p = figure(title='ENC Objects', 
-                   x_axis_type="mercator", y_axis_type="mercator",
-                   plot_width=1500, plot_height=900)
-
-        tile_provider = get_provider(Vendors.CARTODBPOSITRON)
-        p.add_tile(tile_provider)
-
-        for g in self.geojsons:
-            acronym, geom_type = g.stem.split('_')
-            with open(str(g)) as f:
-                geojson_data = f.read()
-
-            source = GeoJSONDataSource(geojson=geojson_data)
-            
-            if geom_type == 'Polygon':
-                p.patches('xs', 'ys', source=source, 
-                          color=c[geom_type][acronym], alpha=0.4)
-
-            elif geom_type == 'LineString':
-                p.multi_line('xs', 'ys', source=source, 
-                             color=c[geom_type][acronym], line_width=2)
-
-            elif geom_type == 'Point':
-                p.circle('x', 'y', source=source, color=c[geom_type][acronym])
-
-        output_file("tile.html")
-        show(p)
-
-    #def create_ref_shoreline(self, objects, band):
-    #    coalne = objects['LineString']['COALNE'], 
-    #    slcons = objects['LineString']['SLCONS'],
-    #    rivers = objects['LineString']['RIVERS'],
-
-    #    coalne_df = pd.concat(coalne, ignore_index=True)
-    #    slcons_df = pd.concat(slcons, ignore_index=True)
-    #    rivers_df = pd.concat(rivers, ignore_index=True)
-
-    #    coalne_gdf = gpd.GeoDataFrame(coalne_df.geometry, crs=self.wgs84)
-    #    slcons_gdf = gpd.GeoDataFrame(slcons_df.geometry, crs=self.wgs84)
-    #    rivers_gdf = gpd.GeoDataFrame(rivers_df.geometry, crs=self.wgs84)
-
-    #    shoreline = coalne_gdf.geometry.union(slcons_gdf.geometry)
-    #    shoreline = shoreline.union(rivers_gdf.geometry)
-    #    gdf = gpd.GeoDataFrame(geometry=shoreline, crs=self.wgs84).explode()
-    #    layer = 'CUSP_Reference_Band{}'.format(band)
-    #    gdf.to_file(self.ref_bands_gpkg_path, layer=layer, driver='GPKG')
-
     def create_ref_shoreline_2(self, objects, band):
 
         lndare = objects['Polygon']['LNDARE']
@@ -199,24 +114,22 @@ class Shorex:
         mcovr_gdf = gpd.GeoDataFrame(mcovr_df.geometry, crs=self.wgs84).explode().reset_index()
         slcons_gdf = gpd.GeoDataFrame(slcons_df.geometry, crs=self.wgs84).explode().reset_index()
         
-        enc_polys = mcovr_gdf
+        enc_polys = mcovr_gdf  # mcover is starting point for enc_polys
 
-        lakare = objects['Polygon']['LAKARE']
-        if not all(o is None for o in lakare):  # if not all None
-            lakare_df = pd.concat(lakare, ignore_index=True)
-            lakare_gdf = gpd.GeoDataFrame(lakare_df.geometry, crs=self.wgs84).explode().reset_index()
-            cols = lndare_gdf.columns
-            lndare_gdf = lndare_gdf.drop([c for c in cols if c is not 'geometry'], axis=1)
-            lndare_gdf = gpd.overlay(lndare_gdf, lakare_gdf, how='difference').explode().reset_index()
+        def difference_objects(lndare_gdf, objects):
+            """differe LNDARE with other objects to get polygon the exterior
+            and interior of which is defined to be the shoreline"""
 
-        rivers = objects['Polygon']['RIVERS']
-        if not all(o is None for o in rivers):  # if not all None
-            rivers_df = pd.concat(rivers, ignore_index=True)
-            rivers_gdf = gpd.GeoDataFrame(rivers_df.geometry, crs=self.wgs84).explode().reset_index()
-            cols = lndare_gdf.columns
-            lndare_gdf = lndare_gdf.drop([c for c in cols if c is not 'geometry'], axis=1)
-            lndare_gdf = gpd.overlay(lndare_gdf, rivers_gdf, how='difference').explode().reset_index()
+            if not all(o is None for o in objects):  # if not all None
+                objects_df = pd.concat(objects, ignore_index=True)
+                objects_gdf = gpd.GeoDataFrame(objects_df.geometry, crs=self.wgs84).explode().reset_index()
+                cols = lndare_gdf.columns
+                lndare_gdf = lndare_gdf.drop([c for c in cols if c is not 'geometry'], axis=1)
+                lndare_gdf = gpd.overlay(lndare_gdf, objects_gdf, how='difference').explode().reset_index()            
+            return lndare_gdf
 
+        lndare_gdf = difference_objects(lndare_gdf, objects['Polygon']['LAKARE'])
+        lndare_gdf = difference_objects(lndare_gdf, objects['Polygon']['RIVERS'])
         
         mcscl = objects['Polygon']['M_CSCL']
         if not all(o is None for o in mcscl):  # if not all None
@@ -242,32 +155,34 @@ class Shorex:
             num_landare = precise_lndares.shape[0]
             for j, lndare in enumerate(precise_lndares.geometry, 1):
                 print('lndare {} of {} (enc_poly {} of {})...'.format(j, num_landare, i, num_enc_polys))
-                #try:
+
                 possible_slcons_idx = list(sindex_slcons.intersection(lndare.bounds))
                 possible_slcons = slcons_gdf.iloc[possible_slcons_idx]
 
                 precise_slcons = possible_slcons.intersection(lndare).explode()
-                precise_slcons = precise_slcons[~precise_slcons.is_empty]
                 precise_slcons = precise_slcons[precise_slcons.geom_type == 'LineString']
+                precise_slcons = precise_slcons[~precise_slcons.is_empty]
 
                 precise_slcons_geom = MultiLineString([g for g in precise_slcons.geometry])
                 slcons = gpd.GeoDataFrame(geometry=[precise_slcons_geom], crs=self.wgs84)
 
                 lndare_poly_gdf = gpd.GeoDataFrame(geometry=[lndare], crs=self.wgs84)
                 if precise_slcons.shape[0] > 0:
-                    clipped_shoreline = lndare_poly_gdf.exterior.difference(slcons)
+                    lndare_exterior_modified = lndare_poly_gdf.exterior.difference(slcons)
 
-                    if not clipped_shoreline.iloc[0].is_empty:
+                    def splice_shoreline(clipped_shoreline):
+                        pass
+
+                    if not lndare_exterior_modified.iloc[0].is_empty:
                         verts = []
-
-                        for l in clipped_shoreline.explode():
+                        for l in lndare_exterior_modified.explode():
                             verts.extend(list(l.coords))
                         verts.append(verts[0])
 
-                        shoreline_geom = LineString(verts)
-                        shoreline_poly_linestring = gpd.GeoDataFrame(geometry=[shoreline_geom], crs=self.wgs84)
+                        lndare_spliced_exterior = gpd.GeoDataFrame(geometry=[LineString(verts)], 
+                                                                   crs=self.wgs84)
 
-                        shoreline_line = shoreline_poly_linestring.difference(poly.boundary)
+                        shoreline_line = lndare_spliced_exterior.difference(poly.boundary)
                         shoreline_bits.append(shoreline_line.explode().reset_index())
                 else:
                     shoreline_line = lndare_poly_gdf.boundary.difference(poly.boundary)
@@ -334,8 +249,32 @@ class Shorex:
                         layer='CUSP_Reference_Band{}_CLIPPED'.format(b))
 
 
-#             coords = list(polygon.exterior.geometry.iloc[0].coords)
-#gdf = g.GeoDataFrame(geometry=[Polygon(coords[2:])], crs=crs)
+def distance(pt1, pt2):  # from https://pelson.github.io/2018/coast-path/
+    result = np.array(geod.inverse(np.asanyarray(pt1), np.asanyarray(pt2)))
+    return result[:, 0]
+
+
+def linestring_distance(geom):  # from https://pelson.github.io/2018/coast-path/
+    if hasattr(geom, 'geoms'):
+        return sum(linestring_distance(subgeom) for subgeom in geom.geoms)
+    else:
+        points = np.array(geom.coords)
+        return distance(points[:-1, :2], points[1:, :2]).sum()
+
+
+def set_env(env_name):
+    user_dir = os.path.expanduser('~')
+    conda_dir = Path(user_dir).joinpath('AppData', 'Local', 'Continuum', 'anaconda3')
+    env_dir = conda_dir / 'envs' / env_name
+    share_dir = env_dir / 'Library' / 'share'
+    script_path = conda_dir / 'Scripts'
+    gdal_data_path = share_dir / 'gdal'
+    proj_lib_path = share_dir
+
+    if script_path.name not in os.environ["PATH"]:
+        os.environ["PATH"] += os.pathsep + str(script_path)
+    os.environ["GDAL_DATA"] = str(gdal_data_path)
+    os.environ["PROJ_LIB"] = str(proj_lib_path)
 
 
 def main():
@@ -346,40 +285,35 @@ def main():
     shorex = Shorex(enc_dir, ref_dir, bands_to_process)
     shorex.set_env_vars('enc_shorex')
 
-    #for band in shorex.bands_to_process:
-    #    print('processing band {}...'.format(band))
-    #    objects_to_extract = {'Point': [],
-    #                          'LineString': ['COALNE', 'SLCONS'],
-    #                          'Polygon': ['LNDARE', 'LNDRGN', 
-    #                                      'M_COVR', 'M_CSCL',
-    #                                      'RIVERS', 'LAKARE']}
+    for band in shorex.bands_to_process:
+        print('processing band {}...'.format(band))
+        objects_to_extract = {'Point': [],
+                              'LineString': ['COALNE', 'SLCONS'],
+                              'Polygon': ['LNDARE', 'LNDRGN', 
+                                          'M_COVR', 'M_CSCL',
+                                          'RIVERS', 'LAKARE']}
 
-    #    objects = {'Point': {}, 'LineString': {}, 'Polygon': {}}
+        objects = {'Point': {}, 'LineString': {}, 'Polygon': {}}
 
-    #    encs = list(shorex.enc_dir.rglob('US{}*.000'.format(band)))
+        encs = list(shorex.enc_dir.rglob('US{}*.000'.format(band)))
         
-    #    num_encs = len(encs)
+        num_encs = len(encs)
 
-    #    for i, enc in enumerate(encs, 1):
-    #        enc = Enc(enc)
-    #        print('{} ({} of {})'.format(enc, i, num_encs))
+        for i, enc in enumerate(encs, 1):
+            enc = Enc(enc)
+            print('{} ({} of {})'.format(enc, i, num_encs))
 
-    #        for geom_type in objects_to_extract.keys():
-    #            for acronym in objects_to_extract[geom_type]:
-    #                enc_objs = enc.get_objects(acronym, geom_type)
+            for geom_type in objects_to_extract.keys():
+                for acronym in objects_to_extract[geom_type]:
+                    enc_objs = enc.get_objects(acronym, geom_type)
 
-    #                if acronym not in objects[geom_type].keys():
-    #                    objects[geom_type].update({acronym: []})
+                    if acronym not in objects[geom_type].keys():
+                        objects[geom_type].update({acronym: []})
 
-    #                objects[geom_type][acronym].append(enc_objs)
+                    objects[geom_type][acronym].append(enc_objs)
 
-    #    shorex.export_to_gpkg(objects, band)
-    #    #shorex.export_to_geojson(objects)
-    #    #shorex.plot_objects()
-
-    #    print(objects)
-
-    #    shorex.create_ref_shoreline_2(objects, band)
+        shorex.export_to_gpkg(objects, band)
+        shorex.create_ref_shoreline_2(objects, band)
 
     shorex.gen_cusp_band_regions()
     shorex.create_cusp_ref()
@@ -387,54 +321,25 @@ def main():
 
 if __name__ == '__main__':
     main()
+    
+    set_env('cusp')
 
-    #user_dir = os.path.expanduser('~')
-    #conda_dir = Path(user_dir).joinpath('AppData', 'Local', 'Continuum', 'anaconda3')
-    #env_dir = conda_dir / 'envs' / 'cusp'
-    #share_dir = env_dir / 'Library' / 'share'
-    #script_path = conda_dir / 'Scripts'
-    #gdal_data_path = share_dir / 'gdal'
-    #proj_lib_path = share_dir
+    band_dir = Path(r'C:\Users\Nick.Forfinski-Sarko\Documents\ArcGIS\Projects\ENC_Shoreline_Extractor\ENC_Shoreline_Extractor.gdb')
 
-    #if script_path.name not in os.environ["PATH"]:
-    #    os.environ["PATH"] += os.pathsep + str(script_path)
-    #os.environ["GDAL_DATA"] = str(gdal_data_path)
-    #os.environ["PROJ_LIB"] = str(proj_lib_path)
+    geod = Geodesic()
+    length = {}
+    for b in range(1, 2):
 
-    #band_dir = Path(r'C:\Users\Nick.Forfinski-Sarko\Documents\ArcGIS\Projects\ENC_Shoreline_Extractor\ENC_Shoreline_Extractor.gdb')
-
-    #geod = Geodesic()
-
-    #def distance(pt1, pt2):  # from https://pelson.github.io/2018/coast-path/
-    #    result = np.array(geod.inverse(np.asanyarray(pt1), np.asanyarray(pt2)))
-    #    return result[:, 0]
-
-
-    #def linestring_distance(geom):  # from https://pelson.github.io/2018/coast-path/
-    #    if hasattr(geom, 'geoms'):
-    #        return sum(linestring_distance(subgeom) for subgeom in geom.geoms)
-    #    else:
-    #        points = np.array(geom.coords)
-    #        return distance(points[:-1, :2], points[1:, :2]).sum()
-
-
-    #length = {}
-    #for b in range(1, 2):
-
-    #    band_gdf = gpd.read_file(str(band_dir), layer='_70k')
+        band_gdf = gpd.read_file(str(band_dir), layer='_70k')
         
-    #    print('70k...'.format(b))
-    #    print('-' * 50)
+        print('70k...'.format(b))
+        print('-' * 50)
 
-    #    band_length = 0
-    #    for geom in band_gdf.geometry:
-    #        band_length += linestring_distance(geom)
+        band_length = 0
+        for geom in band_gdf.geometry:
+            band_length += linestring_distance(geom)
 
-    #    length[str(b)] = band_length
-    #    print(length)
+        length[str(b)] = band_length
 
-
-    #    print()
-
-    #length_df = pd.DataFrame(length, index=[0])
-    #print(length_df.values)
+    length_df = pd.DataFrame(length, index=[0])
+    print(length_df.values)
