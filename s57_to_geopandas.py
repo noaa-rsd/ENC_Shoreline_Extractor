@@ -165,7 +165,10 @@ class Shorex:
         shoreline_bits = []
 
         def cleanup_border_anomalies(enc_poly, shoreline_bit, enc_poly_i):
+
+
             buffer = enc_poly.buffer(0.0000001)
+
             return shoreline_bit.difference(buffer).reset_index()
 
         for land_ring in lndare_multeline:
