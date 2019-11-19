@@ -134,13 +134,14 @@ class Shorex:
     def save_shoreline(self, shoreline_bits, band):
         print('saving results...')
         df = pd.concat(shoreline_bits, ignore_index=True)
-        gdf = gpd.GeoDataFrame(geometry=df[0], crs=self.wgs84)
-        gdf = gdf[gdf.geom_type == 'LineString']
+        print(df)
+        gdf = gpd.GeoDataFrame(geometry=df, crs=self.wgs84)
+        #gdf = gdf[gdf.geom_type == 'LineString']
         gdf.to_file(str(self.ref_bands_gpkg_path), 
                     layer='CUSP_Reference_Band{}'.format(band),
                     driver='GPKG')
 
-    def erase_slcons(self, poly, land_poly, sindex_slcons, slcons_gdf, enc_poly_i):
+    def erase_slcons(self, poly, land_poly, sindex_slcons, slcons_gdf):
 
         def remove_short_linestrings(slcons):
 
@@ -155,8 +156,9 @@ class Shorex:
                     points = np.array(geom.coords)
                     return distance(points[:-1, :2], points[1:, :2]).sum()
 
-            # keep "large piers"
+            # keep "large piers" (as defined by threshold)
             lengths_m = np.asarray([linestring_distance(g) for g in slcons])
+            print(lengths_m)
             keep_indx = lengths_m < self.slcons_tolerance
             return slcons[keep_indx]
 
@@ -164,12 +166,11 @@ class Shorex:
         lndare_multeline = [land_poly.exterior] + list(land_poly.interiors)
         shoreline_bits = []
 
-        def cleanup_border_anomalies(enc_poly, shoreline_bit, enc_poly_i):
-
-
+        def erase_mcovr_border(shoreline_bit, enc_poly):
             buffer = enc_poly.buffer(0.0000001)
-
-            return shoreline_bit.difference(buffer).reset_index()
+            shoreline_bit = shoreline_bit.difference(enc_poly.boundary).explode().reset_index()
+            return shoreline_bit
+            #return shoreline_bit.difference(buffer).explode().reset_index()  # address "anomaly"
 
         for land_ring in lndare_multeline:
             land_ring_poly = Polygon(land_ring)
@@ -191,24 +192,25 @@ class Shorex:
                     for cs in clipped_shoreline:
                         verts.extend(cs.coords)
                     verts.append(verts[0])
-                    spliced_lndare_exterior = gpd.GeoDataFrame(geometry=[LineString(verts)],
-                                                                crs=self.wgs84)
-                    return spliced_lndare_exterior
+                    return gpd.GeoDataFrame(geometry=[LineString(verts)], crs=self.wgs84) 
 
                 precise_slcons = remove_short_linestrings(precise_slcons.geometry)
                 slcons = gpd.GeoDataFrame(geometry=precise_slcons, crs=self.wgs84)        
                 lndare_boundary_modified = lndare_poly_gdf.boundary.difference(slcons).explode()
 
                 if not lndare_boundary_modified.empty:
-                    spliced_lndare_exterior = splice_lndare_exterior(lndare_boundary_modified)
-                    shoreline_bit = spliced_lndare_exterior.difference(poly.boundary).explode()
-                    shoreline_bit = cleanup_border_anomalies(poly.boundary, shoreline_bit, enc_poly_i)
-                    shoreline_bits.append(shoreline_bit)
+                    shoreline_bit = splice_lndare_exterior(lndare_boundary_modified)
+                    if shoreline_bit.intersects(poly.boundary).iloc[0]:
+                        shoreline_bit = erase_mcovr_border(shoreline_bit, poly)
+                    shoreline_bits.append(shoreline_bit[0])
 
             else:
-                shoreline_bit = lndare_poly_gdf.boundary.difference(poly.boundary).explode()
-                shoreline_bit = cleanup_border_anomalies(poly.boundary, shoreline_bit, enc_poly_i)
-                shoreline_bits.append(shoreline_bit)
+                if lndare_poly_gdf.boundary.intersects(poly.boundary).iloc[0]:
+                    #shoreline_bit = lndare_poly_gdf.boundary.difference(poly.boundary)#.explode()
+                    shoreline_bit = erase_mcovr_border(lndare_poly_gdf, poly)
+                    shoreline_bits.append(shoreline_bit[0])
+                else:
+                    shoreline_bits.append(lndare_poly_gdf.boundary.geometry)
 
         return shoreline_bits
 
@@ -237,7 +239,7 @@ class Shorex:
             print('band {} enc_poly {} of {}...'.format(band, i, num_enc_polys))
             possible_lndare_idx = list(sindex_lndare.intersection(poly.bounds))
             possible_lndares = lndare_gdf.iloc[possible_lndare_idx]
-            land_polys = possible_lndares.intersection(poly)
+            prelim_land_polys = possible_lndares.intersection(poly)
 
             def get_land_polys(lndares):
                 #''' some lndare features overlap; union to avoid non-shoreline parts 
@@ -250,11 +252,12 @@ class Shorex:
                 lndares = gpd.GeoDataFrame(geometry=lndares, crs=self.wgs84)
                 return lndares.geometry
                  
-            for land_poly in get_land_polys(land_polys):
+
+
+
+            for land_poly in get_land_polys(prelim_land_polys):
                 try:                    
-                    #gpd.GeoSeries(poly).to_file(self.cusp_ref_gpkg_path,
-                    #                           layer='ENC_poly_{}'.format(i), driver='GPKG')
-                    shoreline_bits = self.erase_slcons(poly, land_poly, sindex_slcons, slcons_gdf, i)
+                    shoreline_bits = self.erase_slcons(poly, land_poly, sindex_slcons, slcons_gdf)
                     #cProfile.runctx("self.erase_slcons(poly, land_poly, sindex_slcons, slcons_gdf)", globals(), locals())
                     shoreline.extend(shoreline_bits)
                 except Exception as e:
@@ -312,6 +315,7 @@ class Shorex:
             
                 print('saving results...')
                 df = pd.concat(lines, ignore_index=True)
+                print(df)
                 gdf = gpd.GeoDataFrame(geometry=df)
                 gdf = gdf[gdf.geom_type == 'LineString']
                 gdf.crs = self.wgs84
