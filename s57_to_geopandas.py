@@ -251,8 +251,13 @@ class Shorex:
                 shoreline_bits = []
                 for l in lndares_poly_slcons:
                     slcon_erased = erase_slcons(l, sindex_slcons, slcons_gdf)
-                    poly_erased = erase_enc_poly(slcon_erased, poly)
-                    shoreline_bits.extend(list(poly_erased))
+                
+                    try:
+                        print(slcon_erased)
+                        poly_erased = erase_enc_poly(slcon_erased, poly)
+                        shoreline_bits.extend(list(poly_erased))
+                    except Exception as e:
+                        print(e)
 
                 return gpd.GeoSeries(shoreline_bits, crs=self.wgs84)
 
@@ -261,8 +266,11 @@ class Shorex:
                 return lndares_nopoly_slcons
 
             def get_land_linestrings_3(land_polys, indx_poly, indx_slcons):
-                lndares_poly_noslcons = land_polys[indx_poly & ~indx_slcons]                
-                return erase_enc_poly(list(lndares_poly_noslcons), poly)
+                lndares_poly_noslcons = land_polys[indx_poly & ~indx_slcons]   
+                try:
+                    return erase_enc_poly(list(lndares_poly_noslcons), poly)
+                except Exception as e:
+                    print(e)
 
             def get_land_linestrings_4(land_polys, indx_poly, indx_slcons):
                 land_polys = land_polys[~indx_poly & ~indx_slcons]
@@ -353,7 +361,7 @@ def main():
 
         encs = list(shorex.enc_dir.rglob('US{}TX*.000'.format(band)))
         #encs += list(shorex.enc_dir.rglob('US{}NH02*.000'.format(band)))
-        encs = [e for e in encs if e.stem in ['US5TX73M', 'US5TX61M']]
+        #encs = [e for e in encs if e.stem in ['US5TX73M', 'US5TX61M']]
         for e in encs:
             print(e)
 
@@ -372,7 +380,7 @@ def main():
                     objects[geom_type][acronym].append(enc_objs)
 
         #try:
-        shorex.export_to_gpkg(objects, band)
+        #shorex.export_to_gpkg(objects, band)
         shorex.create_shoreline(objects, band)
         #except Exception as e:
         #    print(e)
