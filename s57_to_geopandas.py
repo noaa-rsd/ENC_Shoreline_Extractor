@@ -133,86 +133,13 @@ class Shorex:
 
     def save_shoreline(self, shoreline_bits, band):
         print('saving results...')
+        shoreline_bits = [sb for sb in shoreline_bits if not sb.empty]
         df = pd.concat(shoreline_bits, ignore_index=True)
-        print(df)
-        gdf = gpd.GeoDataFrame(geometry=df, crs=self.wgs84)
+        gdf = gpd.GeoDataFrame(geometry=df.geometry, crs=self.wgs84)
         #gdf = gdf[gdf.geom_type == 'LineString']
         gdf.to_file(str(self.ref_bands_gpkg_path), 
                     layer='CUSP_Reference_Band{}'.format(band),
                     driver='GPKG')
-
-    def erase_slcons(self, poly, land_poly, sindex_slcons, slcons_gdf):
-
-        def remove_short_linestrings(slcons):
-
-            def distance(pt1, pt2):
-                result = np.array(self.geod.inverse(np.asanyarray(pt1), np.asanyarray(pt2)))
-                return result[:, 0]
-
-            def linestring_distance(geom):  # from https://pelson.github.io/2018/coast-path/
-                if hasattr(geom, 'geoms'):
-                    return sum(linestring_distance(subgeom) for subgeom in geom.geoms)
-                else:
-                    points = np.array(geom.coords)
-                    return distance(points[:-1, :2], points[1:, :2]).sum()
-
-            # keep "large piers" (as defined by threshold)
-            lengths_m = np.asarray([linestring_distance(g) for g in slcons])
-            print(lengths_m)
-            keep_indx = lengths_m < self.slcons_tolerance
-            return slcons[keep_indx]
-
-        # account for exterior and interior rings (i.e., "the doughnut and the doughnut hole")
-        lndare_multeline = [land_poly.exterior] + list(land_poly.interiors)
-        shoreline_bits = []
-
-        def erase_mcovr_border(shoreline_bit, enc_poly):
-            buffer = enc_poly.buffer(0.0000001)
-            shoreline_bit = shoreline_bit.difference(enc_poly.boundary).explode().reset_index()
-            return shoreline_bit
-            #return shoreline_bit.difference(buffer).explode().reset_index()  # address "anomaly"
-
-        for land_ring in lndare_multeline:
-            land_ring_poly = Polygon(land_ring)
-            lndare_poly_gdf = gpd.GeoDataFrame(geometry=[land_ring_poly], crs=self.wgs84)
-        
-            possible_slcons_idx = list(sindex_slcons.intersection(land_ring_poly.bounds))
-            possible_slcons = slcons_gdf.iloc[possible_slcons_idx]
-
-            precise_slcons = possible_slcons.intersection(land_ring_poly)
-            precise_slcons = precise_slcons.unary_union
-            geo = gpd.GeoSeries(precise_slcons).explode()
-            lines_geom = geo[geo.geom_type == 'LineString'].reset_index()[0]
-            precise_slcons = gpd.GeoDataFrame(geometry=lines_geom, crs=self.wgs84)
-
-            if not precise_slcons.empty:
-
-                def splice_lndare_exterior(clipped_shoreline):
-                    verts = []
-                    for cs in clipped_shoreline:
-                        verts.extend(cs.coords)
-                    verts.append(verts[0])
-                    return gpd.GeoDataFrame(geometry=[LineString(verts)], crs=self.wgs84) 
-
-                precise_slcons = remove_short_linestrings(precise_slcons.geometry)
-                slcons = gpd.GeoDataFrame(geometry=precise_slcons, crs=self.wgs84)        
-                lndare_boundary_modified = lndare_poly_gdf.boundary.difference(slcons).explode()
-
-                if not lndare_boundary_modified.empty:
-                    shoreline_bit = splice_lndare_exterior(lndare_boundary_modified)
-                    if shoreline_bit.intersects(poly.boundary).iloc[0]:
-                        shoreline_bit = erase_mcovr_border(shoreline_bit, poly)
-                    shoreline_bits.append(shoreline_bit[0])
-
-            else:
-                if lndare_poly_gdf.boundary.intersects(poly.boundary).iloc[0]:
-                    #shoreline_bit = lndare_poly_gdf.boundary.difference(poly.boundary)#.explode()
-                    shoreline_bit = erase_mcovr_border(lndare_poly_gdf, poly)
-                    shoreline_bits.append(shoreline_bit[0])
-                else:
-                    shoreline_bits.append(lndare_poly_gdf.boundary.geometry)
-
-        return shoreline_bits
 
     def create_shoreline(self, objects, band):
         m_covr = objects['Polygon']['M_COVR']
@@ -251,17 +178,100 @@ class Shorex:
                 lndares = lndares[lndares.geom_type == 'Polygon'].reset_index()[0]
                 lndares = gpd.GeoDataFrame(geometry=lndares, crs=self.wgs84)
                 return lndares.geometry
-                 
+                
+            land_polys = get_land_polys(prelim_land_polys)
+            indx_poly = land_polys.intersects(poly.boundary)
+            indx_slcons = land_polys.intersects(slcons_gdf)
 
+            def erase_enc_poly(land_polys, poly):
+                land_multipoly_boundary = MultiPolygon(land_polys).boundary
+                shoreline_geom = land_multipoly_boundary.difference(poly.boundary)
+                #buffer = poly.buffer(0.0000001)
+                #return shoreline_bit.difference(buffer).explode()  # address "anomaly"
+                return gpd.GeoSeries(shoreline_geom).explode()
 
+            def erase_slcons(land_poly, sindex_slcons, slcons_gdf):
 
-            for land_poly in get_land_polys(prelim_land_polys):
-                try:                    
-                    shoreline_bits = self.erase_slcons(poly, land_poly, sindex_slcons, slcons_gdf)
-                    #cProfile.runctx("self.erase_slcons(poly, land_poly, sindex_slcons, slcons_gdf)", globals(), locals())
-                    shoreline.extend(shoreline_bits)
-                except Exception as e:
-                    print(e)
+                def remove_short_linestrings(slcons):
+
+                    def distance(pt1, pt2):
+                        result = np.array(self.geod.inverse(np.asanyarray(pt1), np.asanyarray(pt2)))
+                        return result[:, 0]
+
+                    def linestring_distance(geom):  # from https://pelson.github.io/2018/coast-path/
+                        if hasattr(geom, 'geoms'):
+                            return sum(linestring_distance(subgeom) for subgeom in geom.geoms)
+                        else:
+                            points = np.array(geom.coords)
+                            return distance(points[:-1, :2], points[1:, :2]).sum()
+
+                    # keep "large piers" (as defined by threshold)
+                    lengths_m = np.asarray([linestring_distance(g) for g in slcons])
+                    keep_indx = lengths_m < self.slcons_tolerance
+                    return slcons[keep_indx]
+
+                def splice_lndare_exterior(clipped_shoreline):
+                    verts = []
+                    for cs in clipped_shoreline:
+                        verts.extend(cs.coords)
+                    verts.append(verts[0])
+                    return Polygon(verts)
+
+                # account for exterior and interior rings (i.e., "the doughnut and the doughnut hole")
+                lndare_rings = [land_poly.exterior] + list(land_poly.interiors)
+
+                shoreline_ring_bits = []
+                for land_ring in lndare_rings:
+                    land_ring_poly = Polygon(land_ring)
+                    lndare_ring_gdf = gpd.GeoDataFrame(geometry=[land_ring_poly], crs=self.wgs84)
+        
+                    possible_slcons_idx = list(sindex_slcons.intersection(land_ring_poly.bounds))
+                    possible_slcons = slcons_gdf.iloc[possible_slcons_idx]
+
+                    precise_slcons = possible_slcons.intersection(land_ring_poly)
+                    precise_slcons = precise_slcons.unary_union
+                    geo = gpd.GeoSeries(precise_slcons).explode()
+                    lines_geom = geo[geo.geom_type == 'LineString'].reset_index()[0]
+                    precise_slcons = gpd.GeoDataFrame(geometry=lines_geom, crs=self.wgs84)
+
+                    if not precise_slcons.empty:
+                        precise_slcons = remove_short_linestrings(precise_slcons.geometry)
+                        precise_slcons_multiline = MultiLineString(list(precise_slcons))
+                        slcons = gpd.GeoDataFrame(geometry=[precise_slcons_multiline], crs=self.wgs84)  
+                        lndare_boundary_modified = lndare_ring_gdf.boundary.difference(slcons).explode().reset_index()[0]
+
+                        #if lndare_boundary_modified:
+                        shoreline_ring_bit = splice_lndare_exterior(lndare_boundary_modified)
+                        shoreline_ring_bits.append(shoreline_ring_bit)
+
+                return shoreline_ring_bits
+
+            def get_land_linestrings_1(land_polys, indx_poly, indx_slcons):
+                lndares_poly_slcons = land_polys[indx_poly & indx_slcons]
+                shoreline_bits = []
+                for l in lndares_poly_slcons:
+                    slcon_erased = erase_slcons(l, sindex_slcons, slcons_gdf)
+                    poly_erased = erase_enc_poly(slcon_erased, poly)
+                    shoreline_bits.extend(list(poly_erased))
+
+                return gpd.GeoSeries(shoreline_bits, crs=self.wgs84)
+
+            def get_land_linestrings_2(land_polys, indx_poly, indx_slcons):
+                lndares_nopoly_slcons = land_polys[~indx_poly & indx_slcons]
+                return lndares_nopoly_slcons
+
+            def get_land_linestrings_3(land_polys, indx_poly, indx_slcons):
+                lndares_poly_noslcons = land_polys[indx_poly & ~indx_slcons]                
+                return erase_enc_poly(list(lndares_poly_noslcons), poly)
+
+            def get_land_linestrings_4(land_polys, indx_poly, indx_slcons):
+                land_polys = land_polys[~indx_poly & ~indx_slcons]
+                return land_polys.boundary.explode()
+
+            shoreline.append(get_land_linestrings_1(land_polys, indx_poly, indx_slcons))
+            shoreline.append(get_land_linestrings_2(land_polys, indx_poly, indx_slcons))
+            shoreline.append(get_land_linestrings_3(land_polys, indx_poly, indx_slcons))
+            shoreline.append(get_land_linestrings_4(land_polys, indx_poly, indx_slcons))
             
         self.save_shoreline(shoreline, band)
 
@@ -315,7 +325,6 @@ class Shorex:
             
                 print('saving results...')
                 df = pd.concat(lines, ignore_index=True)
-                print(df)
                 gdf = gpd.GeoDataFrame(geometry=df)
                 gdf = gdf[gdf.geom_type == 'LineString']
                 gdf.crs = self.wgs84
@@ -328,7 +337,7 @@ class Shorex:
 def main():
     enc_dir = Path(r'C:\ENCs\All_ENCs\ENC_ROOT')
     ref_dir = Path(r'Z:\ENC_Shoreline_Extractor')
-    bands_to_process = [4, 5, 6]
+    bands_to_process = [5]
     shorex = Shorex(enc_dir, ref_dir, bands_to_process)
     shorex.set_env_vars('enc_shorex')
 
@@ -362,11 +371,11 @@ def main():
 
                     objects[geom_type][acronym].append(enc_objs)
 
-        try:
-            shorex.export_to_gpkg(objects, band)
-            shorex.create_shoreline(objects, band)
-        except Exception as e:
-            print(e)
+        #try:
+        shorex.export_to_gpkg(objects, band)
+        shorex.create_shoreline(objects, band)
+        #except Exception as e:
+        #    print(e)
 
     shorex.gen_cusp_band_regions()
     shorex.create_cusp_ref()
