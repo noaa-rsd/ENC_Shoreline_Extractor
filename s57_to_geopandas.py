@@ -79,6 +79,20 @@ class Shorex:
         os.environ["GDAL_DATA"] = str(gdal_data_path)
         os.environ["PROJ_LIB"] = str(proj_lib_path)
 
+    def export_mcovr_list(self, mcovr_list, band):
+        df = pd.concat(mcovr_list)
+        df['band'] = [band] * df.shape[0]
+        gdf = gpd.GeoDataFrame(df, geometry='geometry',
+                                crs=self.wgs84).explode()
+                
+        try:
+            gpkg = str(self.enc_objects).replace('BAND', 'BAND{}'.format(band))
+            layer = 'M_COVR_Polygon_Band{}'.format(band)
+            print('exporting {} to {}...'.format(layer, gpkg))
+            gdf.to_file(gpkg, layer=layer, driver='GPKG')
+        except Exception as e:
+            print(e, '({} - {})'.format(acronym, geom_type))
+
     def export_to_gpkg(self, objects, band):
         for geom_type, v in objects.items():
             for acronym, objects_list in v.items():
@@ -173,9 +187,9 @@ class Shorex:
                 #of lndare exteriors ending up in the shoreline layer'''
                 lndares = gpd.GeoSeries(lndares)
                 lndares = lndares[lndares.geom_type == 'Polygon']
-                lndares = gpd.GeoSeries(lndares).unary_union
-                lndares = gpd.GeoSeries(lndares).explode()
-                lndares = lndares[lndares.geom_type == 'Polygon'].reset_index()[0]
+                #lndares = gpd.GeoSeries(lndares).unary_union
+                #lndares = gpd.GeoSeries(lndares).explode()
+                #lndares = lndares[lndares.geom_type == 'Polygon'].reset_index()[0]
                 lndares = gpd.GeoDataFrame(geometry=lndares, crs=self.wgs84)
                 return lndares.geometry
 
@@ -183,8 +197,6 @@ class Shorex:
                 if land_polys:
                     land_multipoly_boundary = MultiPolygon(land_polys).boundary
                     shoreline_geom = land_multipoly_boundary.difference(poly.boundary)
-                    #buffer = poly.buffer(0.0000001)
-                    #return shoreline_bit.difference(buffer).explode()  # address "anomaly"
                 else:
                     shoreline_geom = []
                 return gpd.GeoSeries(shoreline_geom, crs=self.wgs84).explode()
@@ -218,7 +230,6 @@ class Shorex:
 
                 # account for Lake-Tahoe--type case (with interior ring)
                 lndare_rings = [land_poly.exterior] + list(land_poly.interiors)
-
                 shoreline_ring_bits = []
                 for land_ring in lndare_rings:
                     land_ring_poly = Polygon(land_ring)
@@ -243,6 +254,10 @@ class Shorex:
                         if not lndare_bound_mod.empty:
                             spliced_shoreline_poly = splice_lndare_exterior(lndare_bound_mod)
                             shoreline_ring_bits.append(spliced_shoreline_poly)
+
+                    else:
+                        # precise_slcons will be empty if only ends of slcons touch lndare
+                        shoreline_ring_bits.append(Polygon(lndare_ring_gdf.exterior.iloc[0]))
 
                 return shoreline_ring_bits
 
@@ -277,7 +292,7 @@ class Shorex:
 
             land_polys = get_land_polys(prelim_land_polys)
             indx_poly = land_polys.intersects(poly.boundary)
-            indx_slcons = land_polys.intersects(poly_slcons)
+            indx_slcons = land_polys.intersects(MultiLineString(list(poly_slcons)))
             
             s1_indx = indx_poly & indx_slcons
             s2_indx = ~indx_poly & indx_slcons
@@ -295,7 +310,7 @@ class Shorex:
                 if not s.empty:
                     shoreline.append(s)
             
-        self.save_shoreline(shoreline, band)
+        return shoreline
 
     def gen_cusp_band_regions(self):
         bands = []
@@ -356,11 +371,10 @@ class Shorex:
 
 
 def main():
-    #cProfile.runctx('shorex.create_shoreline(objects, band)', globals(), locals())
 
     enc_dir = Path(r'C:\ENCs\All_ENCs\ENC_ROOT')
     ref_dir = Path(r'Z:\ENC_Shoreline_Extractor')
-    bands_to_process = [1, 2, 3, 4, 5, 6]
+    bands_to_process = [4]
     shorex = Shorex(enc_dir, ref_dir, bands_to_process)
     shorex.set_env_vars('enc_shorex')
 
@@ -371,12 +385,17 @@ def main():
                                           'M_COVR', 'M_CSCL',
                                           'RIVERS', 'LAKARE']}
 
-        objects = {'LineString': {}, 'Polygon': {}}
-
-        encs = list(shorex.enc_dir.rglob('US{}TX*.000'.format(band)))
+        encs = list(shorex.enc_dir.rglob('US{}*.000'.format(band)))
+        encs = [e for e in encs if e.stem in ['US4MN1FH']]
         num_encs = len(encs)
+        
+        mcovr_list = []
+        band_shoreline = []
+
         for i, enc in enumerate(encs, 1):
+            objects = {'LineString': {}, 'Polygon': {}}
             enc = Enc(enc)
+            print('-' * 50)
             print('{} ({} of {})'.format(enc, i, num_encs))
 
             for geom_type in objects_to_extract.keys():
@@ -388,11 +407,18 @@ def main():
 
                     objects[geom_type][acronym].append(enc_objs)
 
-        try:
-            shorex.export_to_gpkg(objects, band)
-            shorex.create_shoreline(objects, band)
-        except Exception as e:
-            print(e)
+            try:
+                mcovr_list.extend(objects['Polygon']['M_COVR'])
+                #cProfile.runctx('shorex.create_shoreline(objects, band)', globals(), locals(), sort="cumtime")
+                band_shoreline.extend(shorex.create_shoreline(objects, band))
+            except Exception as e:
+                print(e)
+
+        #try:
+        shorex.export_mcovr_list(mcovr_list, band)
+        shorex.save_shoreline(band_shoreline, band)
+        #except Exception as e:
+        #    print(e)
 
     shorex.gen_cusp_band_regions()
     shorex.create_cusp_ref()
