@@ -39,7 +39,7 @@ class Enc:
                 no_coverage = objects['CATCOV'] != 2
                 objects = objects[no_coverage]
 
-            return objects
+            return gpd.GeoDataFrame(geometry=objects.geometry)
 
         except Exception as e:
             print(e)
@@ -96,55 +96,43 @@ class Shorex:
     def export_to_gpkg(self, objects, band):
         for geom_type, v in objects.items():
             for acronym, objects_list in v.items():
-                if acronym == 'M_COVR':
-                    if not all(o is None for o in objects_list):  # if not all None
-                        df = pd.concat(objects_list)
-                        df['band'] = [band] * df.shape[0]
-                        gdf = gpd.GeoDataFrame(df, geometry='geometry',
-                                                crs=self.wgs84).explode()
+                if not all(o is None for o in objects_list):  # if not all None
+                    df = pd.concat(objects_list)
+                    df['band'] = [band] * df.shape[0]
+                    gdf = gpd.GeoDataFrame(df, geometry='geometry',
+                                            crs=self.wgs84).explode()
                 
-                        try:
-                            gpkg = str(self.enc_objects).replace('BAND', 'BAND{}'.format(band))
-                            layer = '{}_{}_Band{}'.format(acronym, geom_type, band)
-                            print('exporting {} to {}...'.format(layer, gpkg))
-                            gdf.to_file(gpkg, layer=layer, driver='GPKG')
-                        except Exception as e:
-                            print(e, '({} - {})'.format(acronym, geom_type))
+                    try:
+                        gpkg = str(self.enc_objects).replace('BAND', 'BAND{}'.format(band))
+                        layer = '{}_{}_Band{}'.format(acronym, geom_type, band)
+                        print('exporting {} to {}...'.format(layer, gpkg))
+                        gdf.to_file(gpkg, layer=layer, driver='GPKG')
+                    except Exception as e:
+                        print(e, '({} - {})'.format(acronym, geom_type))
 
     def cookie_cut_inland_waters(self, lndare, lakare, rivers):
-        lndare_df = pd.concat(lndare, ignore_index=True)
-        lndare_gdf = gpd.GeoDataFrame(lndare_df.geometry, crs=self.wgs84).explode().reset_index()
+        lndare_geom = lndare[0].geometry.values
+        lndare_gdf = gpd.GeoDataFrame(geometry=lndare_geom, crs=self.wgs84)
 
-        def difference_objects(lndare_gdf, objects):
-            """differe LNDARE with other objects to get polygon the exterior
-            and interior(s) of which are defined to be the shoreline"""
+        objects_to_cut = [lakare[0], rivers[0]]
+        objects_geom = pd.concat(objects_to_cut, 
+                                 ignore_index=True, 
+                                 sort=False).geometry.values
+        objects_gdf = gpd.GeoDataFrame(geometry=objects_geom, crs=self.wgs84)
 
-            objects_df = pd.concat(objects, ignore_index=True)
-            objects_gdf = gpd.GeoDataFrame(objects_df.geometry, crs=self.wgs84).explode().reset_index()
-
-            if not objects_gdf.empty:
-                cols = lndare_gdf.columns
-                lndare_gdf = lndare_gdf.drop([c for c in cols if c is not 'geometry'], axis=1)
-                lndare_gdf = gpd.overlay(lndare_gdf, objects_gdf, how='difference').explode().reset_index()            
-            return lndare_gdf
-        
-        try:
-            lndare_gdf = difference_objects(lndare_gdf, lakare)
-        except Exception as e:
-            print(e)
-
-        try:
-            lndare_gdf = difference_objects(lndare_gdf, rivers)
-        except Exception as e:
-            print(e)
+        if not objects_gdf.empty:
+            lndare_gdf = gpd.overlay(lndare_gdf, objects_gdf, 
+                                     how='difference').explode().reset_index()
 
         return lndare_gdf
 
     def union_mcscl(self, enc_polys, mcscl):
         if not all(o is None for o in mcscl):  # if not all None
             mcscl_df = pd.concat(mcscl, ignore_index=True)
-            mcscl_gdf = gpd.GeoDataFrame(mcscl_df.geometry, crs=self.wgs84).explode().reset_index()
-            enc_polys = gpd.overlay(enc_polys, mcscl_gdf, how='union').explode().reset_index()
+            mcscl_gdf = gpd.GeoDataFrame(mcscl_df.geometry, 
+                                         crs=self.wgs84).explode().reset_index()
+            enc_polys = gpd.overlay(enc_polys, mcscl_gdf, 
+                                    how='union').explode().reset_index()
         return enc_polys
 
     def save_shoreline(self, shoreline_bits, band):
@@ -172,7 +160,6 @@ class Shorex:
         lndare_gdf = self.cookie_cut_inland_waters(lndare, lakare, rivers)
 
         print('intersecting LNDARE with M_COVR to get pre-reference...')
-        sindex_slcons = slcons_gdf.sindex
         sindex_lndare = lndare_gdf.sindex
         shoreline = []
         
@@ -183,13 +170,8 @@ class Shorex:
         for i, poly in enumerate(enc_polys.geometry, 1):
 
             def get_land_polys(lndares):
-                #''' some lndare features overlap; union to avoid non-shoreline parts 
-                #of lndare exteriors ending up in the shoreline layer'''
                 lndares = gpd.GeoSeries(lndares)
                 lndares = lndares[lndares.geom_type == 'Polygon']
-                #lndares = gpd.GeoSeries(lndares).unary_union
-                #lndares = gpd.GeoSeries(lndares).explode()
-                #lndares = lndares[lndares.geom_type == 'Polygon'].reset_index()[0]
                 lndares = gpd.GeoDataFrame(geometry=lndares, crs=self.wgs84)
                 return lndares.geometry
 
@@ -233,21 +215,23 @@ class Shorex:
                 shoreline_ring_bits = []
                 for land_ring in lndare_rings:
                     land_ring_poly = Polygon(land_ring)
-                    lndare_ring_gdf = gpd.GeoDataFrame(geometry=[land_ring_poly], crs=self.wgs84)
         
                     possible_slcons_idx = list(sindex_slcons.intersection(land_ring_poly.bounds))
                     possible_slcons = slcons_gdf.iloc[possible_slcons_idx]
 
                     precise_slcons = possible_slcons.intersection(land_ring_poly)
-                    precise_slcons = precise_slcons.unary_union
-                    geo = gpd.GeoSeries(precise_slcons).explode()
-                    lines_geom = geo[geo.geom_type == 'LineString'].reset_index()[0]
-                    precise_slcons = gpd.GeoDataFrame(geometry=lines_geom, crs=self.wgs84)
+                    slcons_geom = gpd.GeoSeries(precise_slcons, crs=self.wgs84)
+                    lines = slcons_geom.geom_type == 'LineString'
+                    multilines = slcons_geom.geom_type == 'MultiLineString'
+                    slcons_geom = slcons_geom[lines | multilines]
 
-                    if not precise_slcons.empty:
-                        precise_slcons = remove_short_linestrings(precise_slcons.geometry)
-                        precise_slcons_multiline = MultiLineString(list(precise_slcons))
-                        slcons = gpd.GeoDataFrame(geometry=[precise_slcons_multiline], crs=self.wgs84)
+                    if not slcons_geom.empty:
+                        precise_slcons = remove_short_linestrings(slcons_geom)  # geoseries
+                        precise_slcons = precise_slcons.explode().reset_index()[0]
+                        precise_slcons = MultiLineString(list(precise_slcons))
+                        slcons = gpd.GeoDataFrame(geometry=[precise_slcons], crs=self.wgs84)
+                        lndare_ring_gdf = gpd.GeoDataFrame(geometry=[land_ring_poly], 
+                                                           crs=self.wgs84)
                         lndare_bound_mod = lndare_ring_gdf.boundary.difference(slcons)
                         lndare_bound_mod = lndare_bound_mod.explode().reset_index()[0]
 
@@ -257,7 +241,7 @@ class Shorex:
 
                     else:
                         # precise_slcons will be empty if only ends of slcons touch lndare
-                        shoreline_ring_bits.append(Polygon(lndare_ring_gdf.exterior.iloc[0]))
+                        shoreline_ring_bits.append(land_ring_poly)
 
                 return shoreline_ring_bits
 
@@ -272,7 +256,8 @@ class Shorex:
                 shoreline_bits = []
                 for l in land_polys:
                     slcon_erased = erase_slcons(l, sindex_slcons, slcons_gdf)
-                    shoreline_bits.extend(slcon_erased)
+                    # output of erase_slcons is list of Polygons
+                    shoreline_bits.extend([LineString(p.boundary) for p in slcon_erased])
                 return gpd.GeoSeries(shoreline_bits, crs=self.wgs84)
 
             def get_land_linestrings_3(land_polys):
@@ -286,25 +271,34 @@ class Shorex:
             possible_lndares = lndare_gdf.iloc[possible_lndare_idx]
             prelim_land_polys = possible_lndares.intersection(poly)
                 
-            possible_poly_slcons_idx = list(sindex_slcons.intersection(poly.bounds))
-            possible_poly_slcons = slcons_gdf.iloc[possible_poly_slcons_idx]
-            poly_slcons = possible_poly_slcons.intersection(poly)
-
             land_polys = get_land_polys(prelim_land_polys)
             indx_poly = land_polys.intersects(poly.boundary)
-            indx_slcons = land_polys.intersects(MultiLineString(list(poly_slcons)))
             
-            s1_indx = indx_poly & indx_slcons
-            s2_indx = ~indx_poly & indx_slcons
-            s3_indx = indx_poly & ~indx_slcons
-            s4_indx = ~indx_poly & ~indx_slcons
+            shorelines = []
 
-            shoreline_1 = get_land_linestrings_1(land_polys[s1_indx])
-            shoreline_2 = get_land_linestrings_2(land_polys[s2_indx])
-            shoreline_3 = get_land_linestrings_3(land_polys[s3_indx])
-            shoreline_4 = get_land_linestrings_4(land_polys[s4_indx])
+            if not slcons_gdf.empty:
+                sindex_slcons = slcons_gdf.sindex
+                possible_poly_slcons_idx = list(sindex_slcons.intersection(poly.bounds))
+                possible_poly_slcons = slcons_gdf.iloc[possible_poly_slcons_idx]
+                poly_slcons = possible_poly_slcons.intersection(poly)
+                poly_slcons_linestrings = poly_slcons[poly_slcons.geom_type == 'LineString']
+                indx_slcons = land_polys.intersects(MultiLineString(list(poly_slcons_linestrings)))
 
-            shorelines = [shoreline_1, shoreline_2, shoreline_3, shoreline_4]
+                s1_indx = indx_poly & indx_slcons
+                s2_indx = ~indx_poly & indx_slcons
+                s3_indx = indx_poly & ~indx_slcons
+                s4_indx = ~indx_poly & ~indx_slcons
+
+                shorelines.append(get_land_linestrings_1(land_polys[s1_indx]))
+                shorelines.append(get_land_linestrings_2(land_polys[s2_indx]))
+                shorelines.append(get_land_linestrings_3(land_polys[s3_indx]))
+                shorelines.append(get_land_linestrings_4(land_polys[s4_indx]))
+            else:
+                s3_indx = indx_poly
+                s4_indx = ~indx_poly
+
+                shorelines.append(get_land_linestrings_3(land_polys[s3_indx]))
+                shorelines.append(get_land_linestrings_4(land_polys[s4_indx]))
 
             for s in shorelines:
                 if not s.empty:
@@ -371,22 +365,23 @@ class Shorex:
 
 
 def main():
+    #cProfile.runctx('shorex.create_shoreline(objects, band)', 
+    #                globals(), locals(), sort="cumtime")
 
     enc_dir = Path(r'C:\ENCs\All_ENCs\ENC_ROOT')
     ref_dir = Path(r'Z:\ENC_Shoreline_Extractor')
-    bands_to_process = [4]
+    bands_to_process = [1, 2, 3, 4, 5, 6]
     shorex = Shorex(enc_dir, ref_dir, bands_to_process)
     shorex.set_env_vars('enc_shorex')
 
     for band in shorex.bands_to_process:
         print('processing band {}...'.format(band))
         objects_to_extract = {'LineString': ['COALNE', 'SLCONS'],
-                              'Polygon': ['LNDARE', 'LNDRGN', 
-                                          'M_COVR', 'M_CSCL',
+                              'Polygon': ['LNDARE', 'M_COVR', 'M_CSCL',
                                           'RIVERS', 'LAKARE']}
 
         encs = list(shorex.enc_dir.rglob('US{}*.000'.format(band)))
-        encs = [e for e in encs if e.stem in ['US4MN1FH']]
+        #encs = [e for e in encs if e.stem in ['US5NH02M']]
         num_encs = len(encs)
         
         mcovr_list = []
@@ -409,16 +404,15 @@ def main():
 
             try:
                 mcovr_list.extend(objects['Polygon']['M_COVR'])
-                #cProfile.runctx('shorex.create_shoreline(objects, band)', globals(), locals(), sort="cumtime")
                 band_shoreline.extend(shorex.create_shoreline(objects, band))
             except Exception as e:
                 print(e)
 
-        #try:
-        shorex.export_mcovr_list(mcovr_list, band)
-        shorex.save_shoreline(band_shoreline, band)
-        #except Exception as e:
-        #    print(e)
+        try:
+            shorex.export_mcovr_list(mcovr_list, band)
+            shorex.save_shoreline(band_shoreline, band)
+        except Exception as e:
+            print(e)
 
     shorex.gen_cusp_band_regions()
     shorex.create_cusp_ref()
