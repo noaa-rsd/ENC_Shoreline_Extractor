@@ -30,13 +30,13 @@ class Enc:
             objects = objects[objects.geom_type == geom_type]
         
             if acronym is 'SLCONS' and geom_type is 'LineString':
-                piers = objects['CATSLC'] == 4  
-                fenders = objects['CATSLC'] == 14  
-                submerged = objects['WATLEV'] == 3 
+                piers = objects['CATSLC'] == 4  # 4 = pier (jetty)
+                fenders = objects['CATSLC'] == 14  # 14 = fender
+                submerged = objects['WATLEV'] == 3  # 3 = always under water/submerged
                 objects = objects[piers | fenders | submerged]
 
             if acronym is 'M_COVR':
-                no_coverage = objects['CATCOV'] != 2
+                no_coverage = objects['CATCOV'] != 2  # 2 = no coverage available
                 objects = objects[no_coverage]
 
             return gpd.GeoDataFrame(geometry=objects.geometry)
@@ -387,8 +387,8 @@ def main():
                               'Polygon': ['LNDARE', 'M_COVR', 'M_CSCL',
                                           'RIVERS', 'LAKARE']}
 
-        encs = list(shorex.enc_dir.rglob('US{}TX*.000'.format(band)))
-        #encs = [e for e in encs if e.stem in ['US5NY1DM']]
+        encs = list(shorex.enc_dir.rglob('US{}*.000'.format(band)))
+        encs = [e for e in encs if e.stem in ['US5AK9PM']]
         num_encs = len(encs)
         
         mcovr_list = []
