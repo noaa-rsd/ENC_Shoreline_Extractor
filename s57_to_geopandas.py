@@ -176,8 +176,6 @@ class Shorex:
                 lndares = gpd.GeoSeries(lndares, crs=self.wgs84)
                 lndares = lndares[lndares.geom_type == 'Polygon']
                 return lndares
-                #lndares = gpd.GeoDataFrame(geometry=lndares, crs=self.wgs84)
-                #return lndares.geometry
 
             def erase_enc_poly(land_polys, poly):
                 if land_polys:
@@ -379,7 +377,7 @@ def main():
 
     enc_dir = Path(r'C:\ENCs\All_ENCs\ENC_ROOT')
     ref_dir = Path(r'Z:\ENC_Shoreline_Extractor')
-    bands_to_process = [5]
+    bands_to_process = [1, 2, 3, 4, 5, 6]
     shorex = Shorex(enc_dir, ref_dir, bands_to_process)
     shorex.set_env_vars('enc_shorex')
 
