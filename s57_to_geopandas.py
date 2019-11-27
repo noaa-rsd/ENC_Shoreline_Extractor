@@ -253,8 +253,8 @@ class Shorex:
             def get_land_linestrings_1(land_polys):
                 shoreline_bits = []
                 for l in land_polys:
-                    cProfile.runctx('erase_slcons(l, sindex_slcons, slcons_gdf)', 
-                                    globals(), locals(), sort="cumtime")
+                    #cProfile.runctx('erase_slcons(l, sindex_slcons, slcons_gdf)', 
+                    #                globals(), locals(), sort="cumtime")
                     slcon_erased = erase_slcons(l, sindex_slcons, slcons_gdf)
                     shoreline_bits.extend(slcon_erased)
                 return erase_enc_poly(shoreline_bits, poly)
