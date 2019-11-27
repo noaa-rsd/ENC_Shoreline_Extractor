@@ -156,8 +156,10 @@ class Shorex:
         rivers = objects['Polygon']['RIVERS']
         slcons = objects['LineString']['SLCONS']
         
-        slcons_df = pd.concat(slcons, ignore_index=True)
-        slcons_gdf = gpd.GeoDataFrame(slcons_df.geometry, crs=self.wgs84)
+        if slcons[0] is None:
+            slcons_gdf = gpd.GeoDataFrame(geometry=[], crs=self.wgs84)
+        else:
+            slcons_gdf = slcons[0]
 
         print('cookie-cutting out LAKARE and RIVERS...')
         lndare_gdf = self.cookie_cut_inland_waters(lndare, lakare, rivers)
@@ -387,8 +389,8 @@ def main():
                               'Polygon': ['LNDARE', 'M_COVR', 'M_CSCL',
                                           'RIVERS', 'LAKARE']}
 
-        encs = list(shorex.enc_dir.rglob('US{}*.000'.format(band)))
-        encs = [e for e in encs if e.stem in ['US5AK9PM']]
+        encs = list(shorex.enc_dir.rglob('US{}AK*.000'.format(band)))
+        #encs = [e for e in encs if e.stem in ['US5AK9PM']]
         num_encs = len(encs)
         
         mcovr_list = []
@@ -412,7 +414,6 @@ def main():
             try:
                 mcovr_list.extend(objects['Polygon']['M_COVR'])
                 band_shoreline.extend(shorex.create_shoreline(objects, band))
-
             except Exception as e:
                 print(e)
 
