@@ -93,23 +93,6 @@ class Shorex:
         except Exception as e:
             print(e, '({} - {})'.format(acronym, geom_type))
 
-    def export_to_gpkg(self, objects, band):
-        for geom_type, v in objects.items():
-            for acronym, objects_list in v.items():
-                if not all(o is None for o in objects_list):  # if not all None
-                    df = pd.concat(objects_list)
-                    df['band'] = [band] * df.shape[0]
-                    gdf = gpd.GeoDataFrame(df, geometry='geometry',
-                                            crs=self.wgs84).explode()
-                
-                    try:
-                        gpkg = str(self.enc_objects).replace('BAND', 'BAND{}'.format(band))
-                        layer = '{}_{}_Band{}'.format(acronym, geom_type, band)
-                        print('exporting {} to {}...'.format(layer, gpkg))
-                        gdf.to_file(gpkg, layer=layer, driver='GPKG')
-                    except Exception as e:
-                        print(e, '({} - {})'.format(acronym, geom_type))
-
     def cookie_cut_inland_waters(self, lndare, lakare, rivers):
         lndare_geom = lndare[0].geometry.values
         lndare_gdf = gpd.GeoDataFrame(geometry=lndare_geom, crs=self.wgs84)
@@ -195,7 +178,9 @@ class Shorex:
                         result = np.array(self.geod.inverse(np.asanyarray(pt1), np.asanyarray(pt2)))
                         return result[:, 0]
 
-                    def linestring_distance(geom):  # from https://pelson.github.io/2018/coast-path/
+                    def linestring_distance(geom):
+                        """https://pelson.github.io/2018/coast-path/"""
+
                         if hasattr(geom, 'geoms'):
                             return sum(linestring_distance(subgeom) for subgeom in geom.geoms)
                         else:
@@ -340,7 +325,7 @@ class Shorex:
         
         layer = 'CUSP_band_regions'
         curr_cov.to_file(self.cusp_ref_gpkg_path,
-                                 layer=layer, driver='GPKG')
+                         layer=layer, driver='GPKG')
         
     def create_cusp_ref(self):
         band_regions = gpd.read_file(str(self.cusp_ref_gpkg_path), 
@@ -389,7 +374,7 @@ def main():
                               'Polygon': ['LNDARE', 'M_COVR', 'M_CSCL',
                                           'RIVERS', 'LAKARE']}
 
-        encs = list(shorex.enc_dir.rglob('US{}AK*.000'.format(band)))
+        encs = list(shorex.enc_dir.rglob('US{}*.000'.format(band)))
         #encs = [e for e in encs if e.stem in ['US5AK9PM']]
         num_encs = len(encs)
         
